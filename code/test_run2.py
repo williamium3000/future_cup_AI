@@ -1,7 +1,6 @@
 import math
 import torch
 import torch.nn.functional as F
-import data_loader
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
@@ -14,6 +13,10 @@ import time
 import os
 import copy
 import model_loader
+import logging
+
+logging.basicConfig(filename = "result.log", level=logging.NOTSET)
+
 
 def imshow(inp, title=None):
     """Imshow for Tensor."""
@@ -28,7 +31,7 @@ def imshow(inp, title=None):
     plt.pause(100)
 
 
-def check_accuracy_part(loader, model, phase):
+def check_accuracy_part(device, dtype, loader, model, phase):
     print('Checking accuracy on %s set' % phase)   
     num_correct = 0
     num_samples = 0
@@ -45,7 +48,7 @@ def check_accuracy_part(loader, model, phase):
         print('Got %d / %d correct (%.2f)' % (num_correct, num_samples, 100 * acc))
         return acc
 
-def train_part(model, optimizer, is_inception, epochs=1):
+def train_part(model, optimizer, is_inception, dataloaders, device, dtype, epochs=1):
     """
     Train a model on CIFAR-10 using the PyTorch Module API.
     
@@ -86,14 +89,15 @@ def train_part(model, optimizer, is_inception, epochs=1):
 
         
         print('epoche %d, loss = %f' % (e, loss.item()))
-        train_acc = check_accuracy_part(dataloaders["train"], model, "train")
-        test_acc = check_accuracy_part(dataloaders["val"], model, "test")
+        train_acc = check_accuracy_part(device, dtype, dataloaders["train"], model, "train")
+        test_acc = check_accuracy_part(device, dtype, dataloaders["val"], model, "test")
         if test_acc > best_acc:
             best_acc = test_acc
             best_model_wts = copy.deepcopy(model.state_dict())
         print()
     print('Best val Acc: {:4f}'.format(best_acc))
-
+    logging.info('Best val Acc: {:4f}'.format(best_acc))
+    
     # load best model weights
     model.load_state_dict(best_model_wts)
     return model
@@ -109,14 +113,14 @@ def train_part(model, optimizer, is_inception, epochs=1):
 # vgg16 = vgg16.to(device, dtype=dtype)
 # optimizer = torch.optim.Adam(vgg16.parameters(), lr = 0.001)
 # train_part(vgg16, optimizer, epochs=20)
-if __name__ == "__main__":
-    
+def main(model_name, feature_extract, use_pretrained, device):
+    logging.info(model_name + ":")
     dtype = torch.float32
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(device if torch.cuda.is_available() else "cpu")
     print(device)
 
-    feature_extract = True
-    model, input_size = model_loader.initialize_model(model_name = "resnet152", num_classes = 20, feature_extract = feature_extract, use_pretrained=True)
+    # learn all parameters or not
+    model, input_size = model_loader.initialize_model(model_name = model_name, num_classes = 20, feature_extract = feature_extract, use_pretrained=use_pretrained)
     params_to_update = model.parameters()
     print("Params to learn:")
 
@@ -153,12 +157,14 @@ if __name__ == "__main__":
 
 # test_dataset = torch.utils.data.TensorDataset(test_data, test_label)
 # test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=4, shuffle=False)
-
+    size = 224
+    if model_name == "inception":
+        size = 299
     data_transforms = {
         'train': transforms.Compose([
-            # transforms.RandomRotation(degrees = 10),
+            # transforms.RandomRotation(degrees = 50),
             # transforms.RandomResizedCrop((224, 224)),
-            transforms.Resize((224, 224)),
+            transforms.Resize((size, size)),
             # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             # transforms.RandomErasing(p=0.2, scale=(0.02, 0.33), ratio=(0.3, 3.3), value= "random", inplace=False),
@@ -171,12 +177,12 @@ if __name__ == "__main__":
         ]),
     }
 
-    data_dir = '../sorted_data'
+    data_dir = 'sorted_data'
     image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x),
                                             data_transforms[x])
                     for x in ['train', 'val']}
-    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=32,
-                                                shuffle=True, num_workers=4, pin_memory=True)
+    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=16,
+                                                shuffle=True, num_workers=0, pin_memory=True)
                 for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     class_names = image_datasets['train'].classes
@@ -184,10 +190,10 @@ if __name__ == "__main__":
 
 
 
-    # Get a batch of training data
+    # # Get a batch of training data
     # inputs, classes = next(iter(dataloaders['train']))
     # print(input, classes)
-    # Make a grid from batch
+    # # Make a grid from batch
     # out = torchvision.utils.make_grid(inputs)
 
     # imshow(out, title=[class_names[x] for x in classes])
@@ -196,8 +202,18 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(params_to_update, lr = 0.0001)
     # first train fc layer
-    model = train_part(model, optimizer, False, epochs=30)
+    # model.to(device)
+    is_inception = False
+    if model_name == "inception":
+        is_inception = True
+    model = train_part(model, optimizer, is_inception, dataloaders, device, dtype, epochs=1)
+    torch.save(model, './model.pkl')
     # fine tune the whole model
     # for param in model.parameters():
         # param.requires_grad = True
     # model = train_part(model, optimizer, False, epochs=10)
+
+if __name__ == "__main__":
+    # for i in ["resnet18", "resnet50", "alexnet", "vgg11", "vgg19", "squeezenet", "densenet", "inception"]:
+    #     main(i, True, True)
+    main(model_name = "resnet50", feature_extract = True, use_pretrained = True, device = "cuda:0")
